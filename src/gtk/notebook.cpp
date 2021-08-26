@@ -25,6 +25,7 @@
 #include "wx/fontutil.h"
 
 #include "wx/gtk/private.h"
+#include "wx/gtk/private/image.h"
 #include "wx/gtk/private/stylecontext.h"
 
 //-----------------------------------------------------------------------------
@@ -285,23 +286,18 @@ bool wxNotebook::SetPageImage( size_t page, int image )
     if (image >= 0)
     {
         wxCHECK_MSG(HasImageList(), false, "invalid notebook imagelist");
-        const wxBitmap bitmap = GetImageList()->GetBitmap(image);
-        if (pageData->m_image)
+        if (pageData->m_image == NULL)
         {
-            gtk_image_set_from_pixbuf(
-                GTK_IMAGE(pageData->m_image), bitmap.GetPixbuf());
-        }
-        else
-        {
-            pageData->m_image = gtk_image_new_from_pixbuf(bitmap.GetPixbuf());
+            pageData->m_image = wxGtkImage::New();
             gtk_widget_show(pageData->m_image);
             gtk_box_pack_start(GTK_BOX(pageData->m_box),
                 pageData->m_image, false, false, m_padding);
         }
+        WX_GTK_IMAGE(pageData->m_image)->Set(GetImageList()->GetBitmap(image));
     }
     else if (pageData->m_image)
     {
-        gtk_widget_destroy(pageData->m_image);
+        gtk_container_remove(GTK_CONTAINER(pageData->m_box), pageData->m_image);
         pageData->m_image = NULL;
     }
     pageData->m_imageIndex = image;
@@ -491,7 +487,8 @@ bool wxNotebook::InsertPage( size_t position,
         if (HasImageList())
         {
             const wxBitmap bitmap = GetImageList()->GetBitmap(imageId);
-            pageData->m_image = gtk_image_new_from_pixbuf(bitmap.GetPixbuf());
+            pageData->m_image = wxGtkImage::New();
+            WX_GTK_IMAGE(pageData->m_image)->Set(bitmap);
             gtk_box_pack_start(GTK_BOX(pageData->m_box),
                 pageData->m_image, false, false, m_padding);
         }
@@ -562,18 +559,14 @@ int wxNotebook::HitTest(const wxPoint& pt, long *flags) const
     const int y = a.y;
 
     const size_t count = GetPageCount();
-    size_t i = 0;
 
-#ifndef __WXGTK3__
-    GtkNotebook * notebook = GTK_NOTEBOOK(m_widget);
-    if (gtk_notebook_get_scrollable(notebook))
-        i = g_list_position( notebook->children, notebook->first_tab );
-#endif
-
-    for ( ; i < count; i++ )
+    for (size_t i = 0; i < count; i++)
     {
         wxGtkNotebookPage* pageData = GetNotebookPage(i);
         GtkWidget* box = pageData->m_box;
+
+        if (!gtk_widget_get_child_visible(box))
+            continue;
 
         const gint border = gtk_container_get_border_width(GTK_CONTAINER(box));
 

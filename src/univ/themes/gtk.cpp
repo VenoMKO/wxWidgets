@@ -19,9 +19,6 @@
 // for compilers that support precompilation, includes "wx.h".
 #include "wx/wxprec.h"
 
-#ifdef __BORLANDC__
-    #pragma hdrstop
-#endif
 
 #include "wx/univ/theme.h"
 
@@ -828,14 +825,10 @@ void wxGTKRenderer::DrawTextBorder(wxDC& dc,
 
     if ( border != wxBORDER_NONE )
     {
+        DrawRect(dc, &rect, m_penBlack);
         if ( flags & wxCONTROL_FOCUSED )
         {
-            DrawRect(dc, &rect, m_penBlack);
             DrawAntiShadedRect(dc, &rect, m_penDarkGrey, m_penHighlight);
-        }
-        else // !focused
-        {
-            DrawInnerShadedRect(dc, &rect);
         }
     }
 
@@ -1007,8 +1000,8 @@ void wxGTKRenderer::DrawRadioButtonBitmap(wxDC& dc,
 
     dc.SetPen(m_penDarkGrey);
     dc.SetBrush(wxSCHEME_COLOUR(m_scheme, CONTROL_CURRENT)); 
-	// draw the normal border
-	dc.DrawCircle(xRight/2,yBottom/2,yMid);
+    // draw the normal border
+    dc.DrawCircle(xRight/2,yBottom/2,yMid);
 
     wxColor checkedCol, uncheckedCol;
     checkedCol = wxSCHEME_COLOUR(m_scheme, SHADOW_DARK);

@@ -118,7 +118,7 @@ public:
     virtual long XYToPosition(long x, long y) const wxOVERRIDE;
     virtual void ShowPosition(long pos) wxOVERRIDE;
     virtual void WriteText(const wxString& str) wxOVERRIDE ;
-    virtual void SetFont( const wxFont & font , const wxColour& foreground , long windowStyle, bool ignoreBlack = true ) wxOVERRIDE;
+    virtual void SetFont(const wxFont & font) wxOVERRIDE;
 
     virtual bool GetStyle(long position, wxTextAttr& style) wxOVERRIDE;
     virtual void SetStyle(long start, long end, const wxTextAttr& style) wxOVERRIDE;
@@ -136,12 +136,19 @@ public:
 
     virtual void controlTextDidChange() wxOVERRIDE;
 
+    virtual bool CanUndo() const wxOVERRIDE;
+    virtual void Undo() wxOVERRIDE;
+    virtual bool CanRedo() const wxOVERRIDE;
+    virtual void Redo() wxOVERRIDE;
+    virtual void EmptyUndoBuffer() wxOVERRIDE;
+
 protected:
     void DoUpdateTextStyle();
 
     NSScrollView* m_scrollView;
     NSTextView* m_textView;
     bool m_useCharWrapping;
+    NSUndoManager* m_undoManager;
 };
 
 class wxNSComboBoxControl : public wxNSTextFieldControl, public wxComboWidgetImpl

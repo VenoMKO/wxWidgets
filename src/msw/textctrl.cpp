@@ -19,9 +19,6 @@
 // For compilers that support precompilation, includes "wx.h".
 #include "wx/wxprec.h"
 
-#ifdef __BORLANDC__
-    #pragma hdrstop
-#endif
 
 #if wxUSE_TEXTCTRL
 
@@ -65,7 +62,21 @@
 #if wxUSE_RICHEDIT
     #include <richedit.h>
     #include <richole.h>
+
+    // MinGW32 doesn't have tom.h and doesn't define the interfaces and the
+    // constants we need, so we can't use ITextDocument::Undo() with it. All
+    // the other compilers do have this header.
+    #ifndef __MINGW32_TOOLCHAIN__
+        #define wxHAS_TOM_H
+    #endif
+
+    #ifdef wxHAS_TOM_H
+        #include <tom.h>
+    #endif
+
     #include "wx/msw/ole/oleutils.h"
+
+    #include "wx/msw/private/comptr.h"
 #endif // wxUSE_RICHEDIT
 
 #if wxUSE_INKEDIT
@@ -129,6 +140,17 @@ DEFINE_GUID(wxIID_IRichEditOleCallback,
     0x00020d03, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46);
 
 } // anonymous namespace
+
+#ifdef wxHAS_TOM_H
+
+// This one is not defined in the standard libraries at all and MSDN just says
+// to define it explicitly, so we do it for IID_XXX constant itself and not our
+// own wxIID_XXX.
+DEFINE_GUID(IID_ITextDocument,
+    0x8cc497c0, 0xa1df, 0x11ce, 0x80, 0x98, 0x00, 0xaa, 0x00, 0x47, 0xbe, 0x5d);
+
+#endif // wxHAS_TOM_H
+
 #endif // wxUSE_OLE
 
 // ----------------------------------------------------------------------------
@@ -668,6 +690,17 @@ bool wxTextCtrl::MSWCreateText(const wxString& value,
         ::SendMessage(GetHwnd(), EM_SETMARGINS, wParam, lParam);
     }
 
+#if wxUSE_RICHEDIT
+    // For RichEdit >= 4, SetFont(), called above from MSWCreateControl(), uses
+    // EM_SETCHARFORMAT which affects the undo buffer, meaning that CanUndo()
+    // for a newly created control returns true, which is unexpected, so clear
+    // the undo buffer.
+    if ( GetRichVersion() >= 4 )
+    {
+        EmptyUndoBuffer();
+    }
+#endif // wxUSE_RICHEDIT
+
     return true;
 }
 
@@ -692,7 +725,7 @@ void wxTextCtrl::AdoptAttributesFromHWND()
         wxChar c;
         if ( wxSscanf(classname, wxT("RichEdit%d0%c"), &m_verRichEdit, &c) != 2 )
         {
-            wxLogDebug(wxT("Unknown edit control '%s'."), classname.c_str());
+            wxLogDebug(wxT("Unknown edit control '%s'."), classname);
 
             m_verRichEdit = 0;
         }
@@ -1878,7 +1911,7 @@ wxString wxTextCtrl::GetLineText(long lineNo) const
 
         // remove the '\n' at the end, if any (this is how this function is
         // supposed to work according to the docs)
-        if ( buf[len - 1] == wxT('\n') )
+        if ( len && buf[len - 1] == wxT('\n') )
         {
             len--;
         }
@@ -1962,6 +1995,37 @@ bool wxTextCtrl::CanRedo() const
     return wxTextEntry::CanRedo();
 }
 
+#if wxUSE_RICHEDIT
+
+void wxTextCtrl::EmptyUndoBuffer()
+{
+#if wxUSE_OLE && defined(wxHAS_TOM_H)
+    // We need to use Undo(tomFalse) to clear the undo buffer, but calling it
+    // also disables the undo buffer, so we need to enable it again immediately
+    // after clearing by calling Undo(tomTrue).
+    if ( GetRichVersion() >= 4 )
+    {
+        wxCOMPtr<IRichEditOle> pRichEditOle;
+        if ( SendMessage(GetHwnd(), EM_GETOLEINTERFACE,
+                         0, (LPARAM)&pRichEditOle) && pRichEditOle )
+        {
+            wxCOMPtr<ITextDocument> pDoc;
+            HRESULT hr = pRichEditOle->QueryInterface
+                                       (
+                                        wxIID_PPV_ARGS(ITextDocument, &pDoc)
+                                       );
+            if ( SUCCEEDED(hr) )
+            {
+                hr = pDoc->Undo(tomFalse, NULL);
+                if ( SUCCEEDED(hr) )
+                    pDoc->Undo(tomTrue, NULL);
+            }
+        }
+    }
+#endif // wxUSE_OLE && wxHAS_TOM_H
+}
+#endif // wxUSE_RICHEDIT
+
 // ----------------------------------------------------------------------------
 // caret handling (Windows only)
 // ----------------------------------------------------------------------------
@@ -2008,76 +2072,29 @@ void wxTextCtrl::OnDropFiles(wxDropFilesEvent& event)
 
 bool wxTextCtrl::MSWShouldPreProcessMessage(WXMSG* msg)
 {
-    // check for our special keys here: if we don't do it and the parent frame
-    // uses them as accelerators, they wouldn't work at all, so we disable
-    // usual preprocessing for them
-    if ( msg->message == WM_KEYDOWN )
+    // Handle keys specific to (multiline) text controls here.
+    if ( msg->message == WM_KEYDOWN && !(HIWORD(msg->lParam) & KF_ALTDOWN) )
     {
-        const WPARAM vkey = msg->wParam;
-        if ( HIWORD(msg->lParam) & KF_ALTDOWN )
+        switch ( msg->wParam )
         {
-            // Alt-Backspace is accelerator for "Undo"
-            if ( vkey == VK_BACK )
-                return false;
-        }
-        else // no Alt
-        {
-            // we want to process some Ctrl-foo and Shift-bar but no key
-            // combinations without either Ctrl or Shift nor with both of them
-            // pressed
-            const int ctrl = wxIsCtrlDown(),
-                      shift = wxIsShiftDown();
-            switch ( ctrl + shift )
-            {
-                default:
-                    wxFAIL_MSG( wxT("how many modifiers have we got?") );
-                    wxFALLTHROUGH;
+            case VK_RETURN:
+                // This key must be handled only by multiline controls and only
+                // if it's pressed on its own, not with some modifier.
+                if ( !wxIsShiftDown() && !wxIsCtrlDown() && IsMultiLine() )
+                    return false;
+                break;
 
-                case 0:
-                    switch ( vkey )
-                    {
-                        case VK_RETURN:
-                            // This one is only special for multi line controls.
-                            if ( !IsMultiLine() )
-                                break;
-                            wxFALLTHROUGH;
-
-                        case VK_DELETE:
-                        case VK_HOME:
-                        case VK_END:
-                            return false;
-                    }
-                    wxFALLTHROUGH;
-                case 2:
-                    break;
-
-                case 1:
-                    // either Ctrl or Shift pressed
-                    if ( ctrl )
-                    {
-                        switch ( vkey )
-                        {
-                            case 'A':
-                            case 'C':
-                            case 'V':
-                            case 'X':
-                            case VK_INSERT:
-                            case VK_DELETE:
-                            case VK_HOME:
-                            case VK_END:
-                                return false;
-                        }
-                    }
-                    else // Shift is pressed
-                    {
-                        if ( vkey == VK_INSERT || vkey == VK_DELETE )
-                            return false;
-                    }
-            }
+            case VK_BACK:
+                if ( wxIsCtrlDown() && !wxIsShiftDown() &&
+                        MSWNeedsToHandleCtrlBackspace() )
+                    return false;
+                break;
         }
     }
 
-    return wxControl::MSWShouldPreProcessMessage(msg);
+    // Delegate all the other checks to the base classes.
+    return wxTextEntry::MSWShouldPreProcessMessage(msg) &&
+                wxControl::MSWShouldPreProcessMessage(msg);
 }
 
 void wxTextCtrl::OnChar(wxKeyEvent& event)
@@ -2116,7 +2133,7 @@ void wxTextCtrl::OnChar(wxKeyEvent& event)
             // the right thing to do would, of course, be to understand what
             // the hell is IsDialogMessage() doing but this is beyond my feeble
             // forces at the moment unfortunately
-            if ( !(m_windowStyle & wxTE_PROCESS_TAB))
+            if ( !(m_windowStyle & wxTE_PROCESS_TAB) || !IsEditable() )
             {
                 if ( ::GetFocus() == GetHwnd() )
                 {
@@ -2156,8 +2173,119 @@ void wxTextCtrl::MSWProcessSpecialKey(wxKeyEvent& event)
 
 #endif // wxUSE_OLE
 
+void wxTextCtrl::MSWDeleteWordBack()
+{
+    // Surprisingly the behaviour of Ctrl+Backspace is different in all three
+    // cases where it's supported by MSW itself:
+    //
+    //  1. Rich edit controls simply ignore selection and handle it as usual.
+    //  2. Plain edit controls don't do anything when there is selection.
+    //  3. Notepad in Windows 10 1809 and later deletes just the selection.
+    //
+    // The latter behaviour seems the most useful, so do it like this here too.
+    if ( HasSelection() )
+    {
+        RemoveSelection();
+        return;
+    }
+
+    // This variable contains one end of the range to delete, the rest of this
+    // function is concerned with finding the starting end of this range.
+    const long end = GetInsertionPoint();
+
+    long col, line;
+    if ( !PositionToXY(end, &col, &line) )
+        return;
+
+    // We stop at the start of line, so remember it.
+    const long start = XYToPosition(0, line);
+
+    const wxString& text = GetLineText(line);
+
+    // The way it works in rich text controls or when SHAutoComplete() is used
+    // is that it deletes everything until the first span of alphanumeric
+    // characters it finds (moving backwards). But the implementation of the
+    // same shortcut in in notepad in Windows 10 versions 1809 and later
+    // doesn't behave in quite the same way and doesn't handle alphanumeric
+    // characters specially, i.e. it just stops on space. This seems more
+    // useful and simpler to implement, and it probably will become standard in
+    // the future, so do it like this here too.
+
+    // First skip all space starting from the character to the left of the
+    // current one.
+    long current = end;
+    for ( ;; )
+    {
+        if ( current == start )
+        {
+            // When there is nothing but spaces to the left until the start of
+            // line, we need to delete these spaces (if any) as well as the new
+            // line separating this line from the previous one (if any).
+            if ( line > 0 )
+            {
+                // This function is only used with plain EDITs which use "\r\n"
+                // and so we need to subtract 2 to account for the new line.
+                current -= 2;
+            }
+
+            break;
+        }
+
+        // We start from the previous character.
+        --current;
+
+        // Did we find the end of the previous "word"?
+        if ( text[current - start] != ' ' )
+        {
+            for ( ;; )
+            {
+                if ( current == start )
+                {
+                    // We don't delete the new line in this case, as we're going to
+                    // delete some non-spaces in this line.
+                    break;
+                }
+
+                --current;
+
+                if ( text[current - start] == ' ' )
+                {
+                    // Don't delete the space itself.
+                    ++current;
+                    break;
+                }
+            }
+
+            break;
+        }
+    }
+
+    Remove(current, end);
+}
+
+bool wxTextCtrl::MSWNeedsToHandleCtrlBackspace() const
+{
+    // We want to handle the undocumented Ctrl+Backspace shortcut only if it's
+    // not handled by the control itself, which is a bit tricky because it's
+    // normally only handled by rich edit controls, but plain EDIT ones may
+    // also handle it if they use SHAutoComplete().
+    return !HasFlag(wxTE_READONLY) &&
+                !IsRich() &&
+                    !MSWUsesStandardAutoComplete();
+}
+
 void wxTextCtrl::OnKeyDown(wxKeyEvent& event)
 {
+    // Handle Ctrl+Backspace if necessary: this is not a documented standard
+    // shortcut, but it's a de facto standard and people expect it to work.
+    if ( MSWNeedsToHandleCtrlBackspace() &&
+                event.GetModifiers() == wxMOD_CONTROL &&
+                    event.GetKeyCode() == WXK_BACK )
+    {
+        MSWDeleteWordBack();
+        return;
+    }
+
     // richedit control doesn't send WM_PASTE, WM_CUT and WM_COPY messages
     // when Ctrl-V, X or C is pressed and this prevents wxClipboardTextEvent
     // from working. So we work around it by intercepting these shortcuts
@@ -2284,35 +2412,23 @@ wxTextCtrl::MSWHandleMessage(WXLRESULT *rc,
                 // in a read only control
                 long lDlgCode = DLGC_WANTCHARS | DLGC_WANTARROWS;
 
-                if ( IsEditable() )
-                {
-                    // we may have several different cases:
-                    // 1. normal: both TAB and ENTER are used for navigation
-                    // 2. ctrl wants TAB for itself: ENTER is used to pass to
-                    //    the next control in the dialog
-                    // 3. ctrl wants ENTER for itself: TAB is used for dialog
-                    //    navigation
-                    // 4. ctrl wants both TAB and ENTER: Ctrl-ENTER is used to
-                    //    go to the next control (we need some way to do it)
+                // we may have several different cases:
+                // 1. normal: both TAB and ENTER are used for navigation
+                // 2. ctrl wants TAB for itself: ENTER is used to pass to
+                //    the next control in the dialog
+                // 3. ctrl wants ENTER for itself: TAB is used for dialog
+                //    navigation
+                // 4. ctrl wants both TAB and ENTER: Ctrl-ENTER is used to
+                //    go to the next control (we need some way to do it)
 
-                    // multiline controls should always get ENTER for themselves
-                    if ( HasFlag(wxTE_PROCESS_ENTER) || HasFlag(wxTE_MULTILINE) )
-                        lDlgCode |= DLGC_WANTMESSAGE;
+                // multiline controls should always get ENTER for themselves
+                if ( HasFlag(wxTE_PROCESS_ENTER) || HasFlag(wxTE_MULTILINE) )
+                    lDlgCode |= DLGC_WANTMESSAGE;
 
-                    if ( HasFlag(wxTE_PROCESS_TAB) )
-                        lDlgCode |= DLGC_WANTTAB;
+                if ( HasFlag(wxTE_PROCESS_TAB) )
+                    lDlgCode |= DLGC_WANTTAB;
 
-                    *rc |= lDlgCode;
-                }
-                else // !editable
-                {
-                    // NB: use "=", not "|=" as the base class version returns
-                    //     the same flags in the disabled state as usual (i.e.
-                    //     including DLGC_WANTMESSAGE). This is strange (how
-                    //     does it work in the native Win32 apps?) but for now
-                    //     live with it.
-                    *rc = lDlgCode;
-                }
+                *rc |= lDlgCode;
 
                 if ( IsMultiLine() )
                 {
@@ -2599,6 +2715,30 @@ wxSize wxTextCtrl::DoGetSizeFromTextSize(int xlen, int ylen) const
         hText += ylen - GetCharHeight();
 
     return wxSize(wText, hText);
+}
+
+void wxTextCtrl::DoMoveWindow(int x, int y, int width, int height)
+{
+    // We reset the text of single line controls each time their width changes
+    // because they don't adjust their horizontal offset on their own and there
+    // doesn't seem to be any way to convince them to do it other than by just
+    // setting the text again, see #18268.
+    const bool resetText = IsSingleLine() && !IsShownOnScreen();
+    int oldWidth = -1;
+    if ( resetText )
+    {
+        oldWidth = GetSize().x;
+    }
+
+    wxTextCtrlBase::DoMoveWindow(x, y, width, height);
+
+    if ( resetText && GetSize().x != oldWidth )
+    {
+        // We need to use DoWriteText() to avoid our own optimization in
+        // ChangeValue() which does nothing when the text doesn't really
+        // change.
+        DoWriteText(DoGetValue(), 0 /* no flags for no events */);
+    }
 }
 
 // ----------------------------------------------------------------------------

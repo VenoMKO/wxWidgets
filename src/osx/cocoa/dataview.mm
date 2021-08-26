@@ -1632,6 +1632,16 @@ outlineView:(NSOutlineView*)outlineView
 // ============================================================================
 @implementation wxCocoaOutlineView
 
++ (void)initialize
+{
+    static BOOL initialized = NO;
+    if (!initialized)
+    {
+        initialized = YES;
+        wxOSXCocoaClassAddWXMethods( self );
+    }
+}
+
 //
 // initializers / destructor
 //
@@ -1643,6 +1653,7 @@ outlineView:(NSOutlineView*)outlineView
         currentlyEditedColumn =
             currentlyEditedRow = -1;
 
+        [self setAutoresizesOutlineColumn:NO];
         [self registerForDraggedTypes:[NSArray arrayWithObjects:DataViewPboardType,NSStringPboardType,nil]];
         [self setDelegate:self];
         [self setDoubleAction:@selector(actionDoubleClick:)];
@@ -1679,7 +1690,17 @@ outlineView:(NSOutlineView*)outlineView
     wxDataViewCtrl* const dvc = implementation->GetDataViewCtrl();
     wxDataViewModel * const model = dvc->GetModel();
 
-    const wxDataViewItem item = wxDataViewItemFromItem([self itemAtRow:[self clickedRow]]);
+    const NSInteger row = [self clickedRow];
+    if ( row == -1 )
+    {
+        // We can be called even when there is no item under mouse, e.g. when
+        // clicking on empty space under the items. Just ignore such clicks as
+        // we're not supposed to generate any events in this case (and calling
+        // itemAtRow: below would result in errors when the row is invalid).
+        return;
+    }
+
+    const wxDataViewItem item = wxDataViewItemFromItem([self itemAtRow:row]);
 
     const NSInteger col = [self clickedColumn];
     wxDataViewColumn* const dvCol = implementation->GetColumn(col);
@@ -1712,20 +1733,15 @@ outlineView:(NSOutlineView*)outlineView
 // Default enter key behaviour is to begin cell editing. Subclass keyDown to
 // provide a keyboard wxEVT_DATAVIEW_ITEM_ACTIVATED event and allow the NSEvent
 // to pass if the wxEvent is not processed.
-- (void)keyDown:(NSEvent *)event
+
+// catch events routed here and feed them back before things get routed up the responder chain
+// otherwise we lose functionality like arrow keys etc.
+- (void)doCommandBySelector:(SEL)aSelector
 {
-    if( [[event charactersIgnoringModifiers]
-         characterAtIndex: 0] == NSCarriageReturnCharacter )
+    wxWidgetCocoaImpl* impl = (wxWidgetCocoaImpl* ) wxWidgetImpl::FindFromWXWidget( self );
+    if (impl)
     {
-        wxDataViewCtrl* const dvc = implementation->GetDataViewCtrl();
-        const wxDataViewItem item = wxDataViewItem( [[self itemAtRow:[self selectedRow]] pointer]);
-        wxDataViewEvent eventDV(wxEVT_DATAVIEW_ITEM_ACTIVATED, dvc, item);
-        if ( !dvc->GetEventHandler()->ProcessEvent(eventDV) )
-            [super keyDown:event];
-    }
-    else
-    {
-        [super keyDown:event];  // all other keys
+        impl->doCommandBySelector(aSelector, self, _cmd);
     }
 }
 
@@ -1900,6 +1916,8 @@ outlineView:(NSOutlineView*)outlineView
                     [[notification userInfo] objectForKey:@"NSObject"]);
     wxDataViewEvent event(wxEVT_DATAVIEW_ITEM_COLLAPSED, dvc, item);
     dvc->GetEventHandler()->ProcessEvent(event);
+
+    dvc->AdjustAutosizedColumns();
 }
 
 -(void) outlineViewItemDidExpand:(NSNotification*)notification
@@ -1910,6 +1928,8 @@ outlineView:(NSOutlineView*)outlineView
                     [[notification userInfo] objectForKey:@"NSObject"]);
     wxDataViewEvent event(wxEVT_DATAVIEW_ITEM_EXPANDED, dvc, item);
     dvc->GetEventHandler()->ProcessEvent(event);
+
+    dvc->AdjustAutosizedColumns();
 }
 
 -(void) outlineViewSelectionDidChange:(NSNotification*)notification
@@ -1922,8 +1942,61 @@ outlineView:(NSOutlineView*)outlineView
     dvc->GetEventHandler()->ProcessEvent(event);
 }
 
+-(void) sendEditingDoneEvent:(BOOL)isCancelled
+{
+    // under OSX an event indicating the end of an editing session can be sent
+    // even if no event indicating a start of an editing session has been sent
+    // (see Documentation for NSControl controlTextDidEndEditing:); this is
+    // not expected by a user of the wxWidgets library and therefore an
+    // wxEVT_DATAVIEW_ITEM_EDITING_DONE event is only sent if a
+    // corresponding wxEVT_DATAVIEW_ITEM_EDITING_STARTED has been sent
+    // before; to check if a wxEVT_DATAVIEW_ITEM_EDITING_STARTED has
+    // been sent the last edited column/row are valid:
+    if ( currentlyEditedColumn != -1 && currentlyEditedRow != -1 )
+    {
+        NSTableColumn*
+            tableColumn = [[self tableColumns] objectAtIndex:currentlyEditedColumn];
+        wxDataViewColumn* const
+            col([static_cast<wxDVCNSTableColumn*>(tableColumn) getColumnPointer]);
+
+        wxDataViewCtrl* const dvc = implementation->GetDataViewCtrl();
+
+        const wxDataViewItem
+            item = wxDataViewItemFromItem([self itemAtRow:currentlyEditedRow]);
+
+        // send event to wxWidgets:
+        wxDataViewEvent event(wxEVT_DATAVIEW_ITEM_EDITING_DONE, dvc, col, item);
+        if ( isCancelled )
+            event.SetEditCancelled();
+
+        dvc->GetEventHandler()->ProcessEvent(event);
+
+        // we're not editing any more
+        currentlyEditedColumn =
+            currentlyEditedRow = -1;
+    }
+}
+
+-(void) editColumn:(NSInteger)column row:(NSInteger)row withEvent:(NSEvent*)event select:(BOOL)select
+{
+    [super editColumn:column row:row withEvent:event select:select];
+
+    currentlyEditedColumn = column;
+    currentlyEditedRow = row;
+}
+
+-(void) cancelOperation:(id)sender
+{
+    [self abortEditing];
+    [[self window] makeFirstResponder:self];
+
+    [self sendEditingDoneEvent:YES];
+}
+
 -(BOOL) textShouldBeginEditing:(NSText*)textEditor
 {
+    wxUnusedVar(textEditor);
+
     currentlyEditedColumn = [self editedColumn];
     currentlyEditedRow = [self editedRow];
 
@@ -1990,35 +2063,7 @@ outlineView:(NSOutlineView*)outlineView
     // have the checks for IsDeleting() in several other methods of this class.
     [super textDidEndEditing:notification];
 
-    // under OSX an event indicating the end of an editing session can be sent
-    // even if no event indicating a start of an editing session has been sent
-    // (see Documentation for NSControl controlTextDidEndEditing:); this is
-    // not expected by a user of the wxWidgets library and therefore an
-    // wxEVT_DATAVIEW_ITEM_EDITING_DONE event is only sent if a
-    // corresponding wxEVT_DATAVIEW_ITEM_EDITING_STARTED has been sent
-    // before; to check if a wxEVT_DATAVIEW_ITEM_EDITING_STARTED has
-    // been sent the last edited column/row are valid:
-    if ( currentlyEditedColumn != -1 && currentlyEditedRow != -1 )
-    {
-        NSTableColumn*
-            tableColumn = [[self tableColumns] objectAtIndex:currentlyEditedColumn];
-        wxDataViewColumn* const
-            col([static_cast<wxDVCNSTableColumn*>(tableColumn) getColumnPointer]);
-
-        wxDataViewCtrl* const dvc = implementation->GetDataViewCtrl();
-
-        const wxDataViewItem
-            item = wxDataViewItemFromItem([self itemAtRow:currentlyEditedRow]);
-
-        // send event to wxWidgets:
-        wxDataViewEvent event(wxEVT_DATAVIEW_ITEM_EDITING_DONE, dvc, col, item);
-        dvc->GetEventHandler()->ProcessEvent(event);
-
-
-        // we're not editing any more
-        currentlyEditedColumn =
-            currentlyEditedRow = -1;
-    }
+    [self sendEditingDoneEvent:NO];
 }
 
 -(BOOL) becomeFirstResponder
@@ -2042,10 +2087,12 @@ wxCocoaDataViewControl::wxCocoaDataViewControl(wxWindow* peer,
     : wxWidgetCocoaImpl
       (
         peer,
-        [[NSScrollView alloc] initWithFrame:wxOSXGetFrameForControl(peer,pos,size)]
+        [[NSScrollView alloc] initWithFrame:wxOSXGetFrameForControl(peer,pos,size)],
+        wxWidgetImpl::Widget_UserKeyEvents
       ),
       m_DataSource(NULL),
-      m_OutlineView([[wxCocoaOutlineView alloc] init])
+      m_OutlineView([[wxCocoaOutlineView alloc] init]),
+      m_expanderWidth(-1)
 {
     // initialize scrollview (the outline view is part of a scrollview):
     NSScrollView* scrollview = (NSScrollView*) GetWXWidget();
@@ -2088,6 +2135,37 @@ wxCocoaDataViewControl::~wxCocoaDataViewControl()
     [m_DataSource  release];
     [m_OutlineView release];
 }
+
+void wxCocoaDataViewControl::keyEvent(WX_NSEvent event, WXWidget slf, void *_cmd)
+{
+    if( [event type] == NSKeyDown && [[event charactersIgnoringModifiers]
+         characterAtIndex: 0] == NSCarriageReturnCharacter )
+    {
+        wxDataViewCtrl* const dvc = GetDataViewCtrl();
+        const wxDataViewItem item = wxDataViewItem( [[m_OutlineView itemAtRow:[m_OutlineView selectedRow]] pointer]);
+        wxDataViewEvent eventDV(wxEVT_DATAVIEW_ITEM_ACTIVATED, dvc, item);
+        if ( !dvc->GetEventHandler()->ProcessEvent(eventDV) )
+            wxWidgetCocoaImpl::keyEvent(event, slf, _cmd);
+    }
+    else
+    {
+        wxWidgetCocoaImpl::keyEvent(event, slf, _cmd);  // all other keys
+    }
+}
+
+bool wxCocoaDataViewControl::doCommandBySelector(void* sel, WXWidget slf, void* _cmd)
+{
+    bool handled = wxWidgetCocoaImpl::doCommandBySelector(sel, slf, _cmd);
+    // if this special key has not been handled
+    if ( !handled && IsInNativeKeyDown() )
+    {
+        // send the original key event back to the native implementation to get proper default handling like eg for arrow keys
+        wxOSX_EventHandlerPtr superimpl = (wxOSX_EventHandlerPtr) [[slf superclass] instanceMethodForSelector:@selector(keyDown:)];
+        superimpl(slf, @selector(keyDown:), GetLastNativeKeyDownEvent());
+    }
+    return handled;
+}
+
 
 //
 // column related methods (inherited from wxDataViewWidgetImpl)
@@ -2175,7 +2253,9 @@ void wxCocoaDataViewControl::FitColumnWidthToContent(unsigned int pos)
             : m_width(0),
               m_view(view),
               m_column(columnIndex),
-              m_indent(0)
+              m_indent(0),
+              m_expander(-1),
+              m_tableColumn(column)
         {
             // account for indentation in the column with expander
             if ( column == [m_view outlineTableColumn] )
@@ -2190,28 +2270,37 @@ void wxCocoaDataViewControl::FitColumnWidthToContent(unsigned int pos)
         void UpdateWithRow(int row)
         {
             NSCell *cell = [m_view preparedCellAtColumn:m_column row:row];
-            unsigned cellWidth = [cell cellSize].width + 1/*round the float up*/;
+            unsigned cellWidth = ceil([cell cellSize].width);
 
             if ( m_indent )
-                cellWidth += m_indent * ([m_view levelForRow:row] + 1);
+                cellWidth += m_indent * [m_view levelForRow:row];
+
+            if ( m_expander == -1 && m_tableColumn == [m_view outlineTableColumn] )
+            {
+                NSRect rc = [m_view frameOfOutlineCellAtRow:row];
+                m_expander = ceil(rc.origin.x + rc.size.width);
+            }
 
             m_width = wxMax(m_width, cellWidth);
         }
 
         int GetMaxWidth() const { return m_width; }
+        int GetExpanderWidth() const { return m_expander; }
 
     private:
         int m_width;
         wxCocoaOutlineView *m_view;
         unsigned m_column;
         int m_indent;
+        int m_expander;
+        NSTableColumn *m_tableColumn;
     };
 
     MaxWidthCalculator calculator(m_OutlineView, column, pos);
 
     if ( [column headerCell] )
     {
-        calculator.UpdateWithWidth([[column headerCell] cellSize].width + 1/*round the float up*/);
+        calculator.UpdateWithWidth(ceil([[column headerCell] cellSize].width));
     }
 
     // The code below deserves some explanation. For very large controls, we
@@ -2275,7 +2364,12 @@ void wxCocoaDataViewControl::FitColumnWidthToContent(unsigned int pos)
                    count);
     }
 
-    [column setWidth:calculator.GetMaxWidth()];
+    // there might not necessarily be an expander in the rows we've examined above so let's
+    // globally store the expander width for re-use because it should always be the same
+    if ( m_expanderWidth == -1 )
+        m_expanderWidth = calculator.GetExpanderWidth();
+
+    [column setWidth:calculator.GetMaxWidth() + wxMax(0, m_expanderWidth)];
 }
 
 //
@@ -2314,9 +2408,9 @@ void wxCocoaDataViewControl::EnsureVisible(const wxDataViewItem& item, const wxD
     }
 }
 
-void wxCocoaDataViewControl::DoExpand(const wxDataViewItem& item)
+void wxCocoaDataViewControl::DoExpand(const wxDataViewItem& item, bool expandChildren)
 {
-    [m_OutlineView expandItem:[m_DataSource getDataViewItemFromBuffer:item]];
+    [m_OutlineView expandItem:[m_DataSource getDataViewItemFromBuffer:item] expandChildren:expandChildren];
 }
 
 unsigned int wxCocoaDataViewControl::GetCount() const
@@ -2508,6 +2602,20 @@ void wxCocoaDataViewControl::Select(const wxDataViewItem& item)
             byExtendingSelection:GetDataViewCtrl()->HasFlag(wxDV_MULTIPLE) ? YES : NO];
 }
 
+void wxCocoaDataViewControl::Select(const wxDataViewItemArray& items)
+{
+    NSMutableIndexSet *selection = [[NSMutableIndexSet alloc] init];
+
+    for ( const auto& i: items )
+    {
+        if ( i.IsOk() )
+            [selection addIndex:[m_OutlineView rowForItem:[m_DataSource getDataViewItemFromBuffer:i]]];
+    }
+
+    [m_OutlineView selectRowIndexes:selection byExtendingSelection:NO];
+    [selection release];
+}
+
 void wxCocoaDataViewControl::SelectAll()
 {
     [m_OutlineView selectAll:m_OutlineView];
@@ -2694,7 +2802,6 @@ wxDataObjectComposite* wxCocoaDataViewControl::GetDnDDataObjects(NSData* dataObj
                     return NULL;
                 }
             }
-            break;
         default:
             return NULL;
     }
@@ -2705,9 +2812,9 @@ id wxCocoaDataViewControl::GetItemAtRow(int row) const
     return [m_OutlineView itemAtRow:row];
 }
 
-void wxCocoaDataViewControl::SetFont(const wxFont& font, const wxColour& foreground, long windowStyle, bool ignoreBlack)
+void wxCocoaDataViewControl::SetFont(const wxFont& font)
 {
-    wxWidgetCocoaImpl::SetFont(font, foreground, windowStyle, ignoreBlack);
+    wxWidgetCocoaImpl::SetFont(font);
     SetRowHeight(0/*will use default/minimum height*/);
 }
 
@@ -2940,7 +3047,9 @@ void wxDataViewRenderer::SetAttr(const wxDataViewItemAttr& attr)
     {
         if ( !colText )
             colText = data->GetOriginalTextColour();
-        [(id)cell setTextColor:colText];
+
+        if ( colText )
+            [(id)cell setTextColor:colText];
     }
 
     if ( [cell respondsToSelector:@selector(setDrawsBackground:)] )
@@ -3375,7 +3484,7 @@ wxIMPLEMENT_CLASS(wxDataViewCheckIconText, wxDataViewIconText);
 wxDataViewCheckIconTextRenderer::wxDataViewCheckIconTextRenderer
     (
         wxDataViewCellMode mode,
-        int align
+        int WXUNUSED(align)
     )
     : wxDataViewRenderer(GetDefaultType(), mode,mode)
 {

@@ -11,9 +11,6 @@
 // For compilers that support precompilation, includes "wx.h".
 #include "wx/wxprec.h"
 
-#ifdef __BORLANDC__
-    #pragma hdrstop
-#endif
 
 #if wxUSE_NOTEBOOK
 
@@ -677,7 +674,7 @@ bool wxNotebook::InsertPage(size_t nPage,
     // finally do insert it
     if ( TabCtrl_InsertItem(GetHwnd(), nPage, &tcItem) == -1 )
     {
-        wxLogError(wxT("Can't create the notebook page '%s'."), strText.c_str());
+        wxLogError(wxT("Can't create the notebook page '%s'."), strText);
 
         return false;
     }
@@ -790,14 +787,13 @@ void wxNotebook::OnEraseBackground(wxEraseEvent& WXUNUSED(event))
 void wxNotebook::OnPaint(wxPaintEvent& WXUNUSED(event))
 {
     wxPaintDC dc(this);
-    wxMemoryDC memdc;
     RECT rc;
     ::GetClientRect(GetHwnd(), &rc);
-    wxBitmap bmp(rc.right, rc.bottom);
-    memdc.SelectObject(bmp);
+    if ( !rc.right || !rc.bottom )
+        return;
 
-    const wxLayoutDirection dir = dc.GetLayoutDirection();
-    memdc.SetLayoutDirection(dir);
+    wxBitmap bmp(rc.right, rc.bottom);
+    wxMemoryDC memdc(bmp);
 
     const HDC hdc = GetHdcOf(memdc);
 
@@ -867,10 +863,7 @@ void wxNotebook::OnPaint(wxPaintEvent& WXUNUSED(event))
         ::ExtFloodFill(hdc, x, y, ::GetSysColor(COLOR_BTNFACE), FLOODFILLSURFACE);
     }
 
-    // For some reason in RTL mode, source offset has to be -1, otherwise the
-    // right border (physical) remains unpainted.
-    const wxCoord ofs = dir == wxLayout_RightToLeft ? -1 : 0;
-    dc.Blit(ofs, 0, rc.right, rc.bottom, &memdc, ofs, 0);
+    dc.Blit(0, 0, rc.right, rc.bottom, &memdc, 0, 0);
 }
 
 #endif // USE_NOTEBOOK_ANTIFLICKER

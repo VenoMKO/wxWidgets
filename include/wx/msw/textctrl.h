@@ -64,6 +64,9 @@ public:
 
     virtual void Redo() wxOVERRIDE;
     virtual bool CanRedo() const wxOVERRIDE;
+#if wxUSE_RICHEDIT
+    virtual void EmptyUndoBuffer() wxOVERRIDE;
+#endif // wxUSE_RICHEDIT
 
     virtual void SetInsertionPointEnd() wxOVERRIDE;
     virtual long GetInsertionPoint() const wxOVERRIDE;
@@ -241,6 +244,8 @@ protected:
     virtual wxSize DoGetBestSize() const wxOVERRIDE;
     virtual wxSize DoGetSizeFromTextSize(int xlen, int ylen = -1) const wxOVERRIDE;
 
+    virtual void DoMoveWindow(int x, int y, int width, int height) wxOVERRIDE;
+
 #if wxUSE_RICHEDIT
     virtual void MSWUpdateFontOnDPIChange(const wxSize& newDPI) wxOVERRIDE;
 
@@ -291,6 +296,13 @@ private:
 #if wxUSE_OLE
     virtual void MSWProcessSpecialKey(wxKeyEvent& event) wxOVERRIDE;
 #endif // wxUSE_OLE
+
+    // Do we need to handle Ctrl+Backspace ourselves?
+    bool MSWNeedsToHandleCtrlBackspace() const;
+
+    // Delete backwards until the start of the previous word before caret in a
+    // way compatible with the standard MSW Ctrl+Backspace shortcut.
+    void MSWDeleteWordBack();
 
     void OnKeyDown(wxKeyEvent& event);
 

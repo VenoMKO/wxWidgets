@@ -860,6 +860,18 @@ public:
     bool GetUseBestVisual() const;
 
     /**
+        Returns a pointer to the top application window if any.
+
+        This function is safe to call even before creating, or after
+        destroying, the application object, as it simply returns @NULL if it
+        doesn't exist. Otherwise it's equivalent to calling
+        @c wxTheApp->GetTopWindow().
+
+        @since 3.1.5
+     */
+    static wxWindow* GetMainTopWindow();
+
+    /**
         Returns a pointer to the top window.
 
         @remarks
@@ -1120,8 +1132,17 @@ public:
 #define wxDECLARE_APP( className )
 
 /**
-    This is used in the application class implementation file to make the
-    application class known to wxWidgets for dynamic construction.
+    This macro defines the application entry point and tells wxWidgets which
+    application class should be used.
+
+    The two tasks performed by this macro can be done separately by using
+    wxIMPLEMENT_APP_NO_MAIN() and wxIMPLEMENT_WXWIN_MAIN() macros, but in a
+    typical GUI application it's simpler and more convenient to use this macro
+    to do both together.
+
+    The @a className passed to this macro must be a name of the class deriving
+    from wxApp.
+
     Note that this macro requires a final semicolon.
 
     @header{wx/app.h}
@@ -1135,6 +1156,24 @@ public:
     @see wxDECLARE_APP()
 */
 #define wxIMPLEMENT_APP( className )
+
+/**
+    This macro defines the application entry point appropriate for the current
+    platform.
+
+    Note that usually wxIMPLEMENT_APP() is used instead of this macro.
+
+    For most platforms, it defines @c main() function, but for GUI Windows
+    applications, it defines @c WinMain() instead.
+
+    In either case, the macro expansion includes the call to
+    wxDISABLE_DEBUG_SUPPORT() which disables debugging code in release builds.
+    If you don't use this macro, but define the entry point yourself, you
+    probably want to call wxDISABLE_DEBUG_SUPPORT() explicitly.
+
+    @header{wx/app.h}
+ */
+#define wxIMPLEMENT_WXWIN_MAIN
 
 //@}
 
@@ -1181,7 +1220,7 @@ wxAppDerivedClass& wxGetApp();
     Notice that this function is only available if @c wxUSE_ON_FATAL_EXCEPTION
     is 1 and under Windows platform this requires a compiler with support for
     SEH (structured exception handling) which currently means only Microsoft
-    Visual C++ or a recent Borland C++ version.
+    Visual C++.
 
     @header{wx/app.h}
 */
@@ -1246,7 +1285,7 @@ bool wxSafeYield(wxWindow* win = NULL, bool onlyIfNeeded = false);
     This function initializes wxWidgets in a platform-dependent way. Use this if you
     are not using the default wxWidgets entry code (e.g. main or WinMain).
 
-    For example, you can initialize wxWidgets from an Microsoft Foundation Classes
+    For example, you can initialize wxWidgets from a Microsoft Foundation Classes
     (MFC) application using this function.
 
     @note This overload of wxEntry is available under all platforms.

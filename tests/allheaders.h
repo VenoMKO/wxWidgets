@@ -217,7 +217,9 @@
 #include <wx/longlong.h>
 #include <wx/lzmastream.h>
 #include <wx/math.h>
+/* Intentionally excluded to avoid deprecation warnings.
 #include <wx/matrix.h>
+*/
 #include <wx/mdi.h>
 #include <wx/mediactrl.h>
 #include <wx/memconf.h>
@@ -252,6 +254,13 @@
 #include <wx/pen.h>
 #include <wx/peninfobase.h>
 #include <wx/persist.h>
+#include <wx/persist/bookctrl.h>
+#include <wx/persist/combobox.h>
+#include <wx/persist/dataview.h>
+#include <wx/persist/splitter.h>
+#include <wx/persist/toplevel.h>
+#include <wx/persist/treebook.h>
+#include <wx/persist/window.h>
 #include <wx/pickerbase.h>
 #include <wx/platform.h>
 #include <wx/platinfo.h>
@@ -397,6 +406,7 @@
 #include <wx/wxprec.h>
 #include <wx/xlocale.h>
 #include <wx/xpmdecod.h>
+#include <wx/xrc/xmlres.h>
 #include <wx/xti2.h>
 #include <wx/xtictor.h>
 #include <wx/xti.h>

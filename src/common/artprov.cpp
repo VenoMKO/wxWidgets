@@ -15,17 +15,8 @@
 // For compilers that support precompilation, includes "wx.h".
 #include "wx/wxprec.h"
 
-#if defined(__BORLANDC__)
-    #pragma hdrstop
-#endif
 
 #include "wx/artprov.h"
-
-#define wxART_MAKE_CLIENT_ID(id) \
-  extern WXDLLIMPEXP_DATA_CORE(const wxArtClient) id = wxASCII_STR(#id "_C");
-#define wxART_MAKE_ART_ID(id) \
-  extern WXDLLIMPEXP_DATA_CORE(const wxArtID) id = wxASCII_STR(#id);
-#include "wx/artids.h"
 
 #ifndef WX_PRECOMP
     #include "wx/list.h"

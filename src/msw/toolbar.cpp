@@ -19,9 +19,6 @@
 // For compilers that support precompilation, includes "wx.h".
 #include "wx/wxprec.h"
 
-#ifdef __BORLANDC__
-    #pragma hdrstop
-#endif
 
 #if wxUSE_TOOLBAR && wxUSE_TOOLBAR_NATIVE
 
@@ -1453,21 +1450,51 @@ void wxToolBar::UpdateStretchableSpacersSize()
         const int newSize = --numSpaces ? sizeSpacer : sizeLastSpacer;
         if ( newSize != oldSize)
         {
-            WinStruct<TBBUTTONINFO> tbbi;
-            tbbi.dwMask = TBIF_BYINDEX | TBIF_SIZE;
-            tbbi.cx = newSize;
-            if ( !::SendMessage(GetHwnd(), TB_SETBUTTONINFO,
-                                toolIndex, (LPARAM)&tbbi) )
+            // For horizontal toolbars we can just update the separator in
+            // place, but for some unknown reason this just doesn't do anything
+            // in the vertical case, so we have to delete the separator and it
+            // back with the correct size then. This has its own problems and
+            // may mess up toolbars idea of its best size, so do this only when
+            // necessary.
+            if ( !IsVertical() )
             {
-                wxLogLastError(wxT("TB_SETBUTTONINFO (separator)"));
+                // Just update in place.
+                WinStruct<TBBUTTONINFO> tbbi;
+                tbbi.dwMask = TBIF_BYINDEX | TBIF_SIZE;
+                tbbi.cx = newSize;
+                if ( !::SendMessage(GetHwnd(), TB_SETBUTTONINFO,
+                                    toolIndex, (LPARAM)&tbbi) )
+                {
+                    wxLogLastError(wxT("TB_SETBUTTONINFO (separator)"));
+                }
             }
-            else
+            else // Vertical case, use the workaround.
             {
-                // We successfully updated the separator width, move all the
-                // controls appearing after it by the corresponding amount
-                // (which may be positive or negative)
-                offset += newSize - oldSize;
+                if ( !::SendMessage(GetHwnd(), TB_DELETEBUTTON, toolIndex, 0) )
+                {
+                    wxLogLastError(wxT("TB_DELETEBUTTON (separator)"));
+                }
+                else
+                {
+                    TBBUTTON button;
+                    wxZeroMemory(button);
+
+                    button.idCommand = tool->GetId();
+                    button.iBitmap = newSize; // set separator height
+                    button.fsState = TBSTATE_ENABLED | TBSTATE_WRAP;
+                    button.fsStyle = TBSTYLE_SEP;
+                    if ( !::SendMessage(GetHwnd(), TB_INSERTBUTTON,
+                                        toolIndex, (LPARAM)&button) )
+                    {
+                        wxLogLastError(wxT("TB_INSERTBUTTON (separator)"));
+                    }
+                }
             }
+
+            // After updating the separator width, move all the
+            // controls appearing after it by the corresponding amount
+            // (which may be positive or negative)
+            offset += newSize - oldSize;
         }
 
         toolIndex++;
@@ -1922,8 +1949,6 @@ void wxToolBar::OnDPIChanged(wxDPIChangedEvent& event)
 {
     // Manually scale the size of the controls. Even though the font has been
     // updated, the internal size of the controls does not.
-    const float scaleFactor = (float)event.GetNewDPI().y / event.GetOldDPI().y;
-
     wxToolBarToolsList::compatibility_iterator node;
     for ( node = m_tools.GetFirst(); node; node = node->GetNext() )
     {
@@ -1934,7 +1959,7 @@ void wxToolBar::OnDPIChanged(wxDPIChangedEvent& event)
         if ( wxControl* const control = tool->GetControl() )
         {
             const wxSize oldSize = control->GetSize();
-            wxSize newSize = oldSize * scaleFactor;
+            wxSize newSize = event.Scale(oldSize);
 
             // Use the best height for choice-based controls.
             // Scaling the current size does not work, because the control

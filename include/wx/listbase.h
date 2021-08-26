@@ -135,11 +135,12 @@ enum wxListColumnFormat
     wxLIST_FORMAT_CENTER = wxLIST_FORMAT_CENTRE
 };
 
-// Autosize values for SetColumnWidth
+// Values for SetColumnWidth()
 enum
 {
     wxLIST_AUTOSIZE = -1,
-    wxLIST_AUTOSIZE_USEHEADER = -2      // partly supported by generic version
+    wxLIST_AUTOSIZE_USEHEADER = -2,     // partly supported by generic version
+    wxLIST_DEFAULT_COL_WIDTH = 80
 };
 
 // Flag values for GetItemRect
@@ -399,6 +400,14 @@ public:
     virtual int GetColumnWidth(int col) const = 0;
     virtual bool SetColumnWidth(int col, int width) = 0;
 
+    // Column ordering functions
+    virtual int GetColumnOrder(int col) const = 0;
+    virtual int GetColumnIndexFromOrder(int order) const = 0;
+
+    virtual wxArrayInt GetColumnsOrder() const = 0;
+    virtual bool SetColumnsOrder(const wxArrayInt& orders) = 0;
+
+
     // Other miscellaneous accessors.
     // ------------------------------
 
@@ -416,6 +425,8 @@ public:
     void EnableAlternateRowColours(bool enable = true);
     void SetAlternateRowColour(const wxColour& colour);
     wxColour GetAlternateRowColour() const { return m_alternateRowColour.GetBackgroundColour(); }
+
+    virtual void ExtendRulesAndAlternateColour(bool WXUNUSED(extend) = true) { }
 
     // Header attributes support: only implemented in wxMSW currently.
     virtual bool SetHeaderAttr(const wxItemAttr& WXUNUSED(attr)) { return false; }
